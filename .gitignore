@@ -4,3 +4,5 @@
 /debug
 
 Cargo.lock
+
+.env
