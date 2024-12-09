@@ -2,7 +2,6 @@ use serenity::builder::*;
 use serenity::model::prelude::*;
 use serenity::prelude::*;
 use std::time::Duration;
-  // ログ出力を使用
 
 pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), serenity::Error> {
     // 数字1～10を選択できるセレクトメニューを作成
@@ -28,7 +27,7 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
                     .select_menu(select_menu),
             ),
         )
-        .await?;
+        .await?; 
 
     // メッセージのIDを取得して操作
     let message = interaction.get_response(&ctx).await?;
@@ -42,9 +41,9 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
         Some(interaction_response) => interaction_response,
         None => {
             // タイムアウト時のメッセージをconsoleに出力
-            log::info!("タイムアウトしました。");
+            println!("タイムアウトしました。");
 
-            // タイムアウト処理(実行されないにゃ...）
+            // タイムアウト処理
             interaction
                 .create_response(
                     ctx,
@@ -71,15 +70,14 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
     // DMを送信
     if let Ok(dm_channel) = interaction.user.create_dm_channel(ctx).await {
         // DM送信成功時
-        if let Err(e) = dm_channel
+        if let Err(_) = dm_channel
             .say(
                 ctx,
                 format!("あなたは **{}** を選びました！", selected_value),
             )
             .await
         {
-            // DM送信失敗時のログ出力
-            log::error!("DM送信失敗: {}", e);
+            // DM送信失敗時
             interaction_result
                 .create_response(
                     ctx,
