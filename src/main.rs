@@ -7,7 +7,6 @@ use serenity::async_trait;
 use serenity::builder::{CreateInteractionResponse, CreateInteractionResponseMessage};
 use serenity::model::application::Interaction;
 use serenity::model::gateway::Ready;
-use serenity::model::id::GuildId;
 use serenity::prelude::*;
 
 struct Handler;
@@ -50,45 +49,32 @@ impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         println!("{} is connected!", ready.user.name);
 
-        // Fetching the guild ID from environment variables
-        let guild_id = GuildId::new(
-            env::var("GUILD_ID")
-                .expect("Expected GUILD_ID in environment")
-                .parse()
-                .expect("GUILD_ID must be an integer"),
-        );
-
-        // Registering commands
-        if let Err(why) = guild_id
-            .set_commands(
-                &ctx.http,
-                vec![commands::select::register()],
-            )
-            .await
+        // Registering global commands
+        if let Err(why) = serenity::model::application::Command::set_global_commands(
+            &ctx.http,
+            vec![commands::select::register()],
+        )
+        .await
         {
-            println!("Error registering commands: {why}");
+            println!("Error registering global commands: {why}");
         }
     }
 }
 
 #[tokio::main]
 async fn main() {
-    // Load environment variables
     dotenv().ok();
     let token = env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
-    // Define the necessary intents for the bot
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
 
-    // Initialize the client with the token and intents
     let mut client = Client::builder(&token, intents)
         .event_handler(Handler)
         .await
         .expect("Failed to create client");
 
-    // Start the client and handle errors
     if let Err(why) = client.start().await {
         eprintln!("Client error: {why:?}");
     }
