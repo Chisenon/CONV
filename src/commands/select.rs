@@ -3,6 +3,7 @@ use serenity::model::prelude::*;
 use serenity::prelude::*;
 use std::time::Duration;
 
+
 pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), serenity::Error> {
     // 数字1～10を選択できるセレクトメニューを作成
     let select_menu = CreateSelectMenu::new(
@@ -45,15 +46,8 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
 
             // タイムアウト処理
             interaction
-                .create_response(
-                    ctx,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .ephemeral(true)
-                            .content("タイムアウトしました。もう一度試してください。")
-                            .components(vec![]),
-                    ),
-                )
+                .edit_response(ctx, EditInteractionResponse::new()
+                    .content("タイムアウトしました。もう一度試してください。"))
                 .await?;
             return Ok(());
         }
