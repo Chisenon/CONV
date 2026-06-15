@@ -17,7 +17,7 @@ impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         if let Interaction::Command(command) = interaction {
             match command.data.name.as_str() {
-                "画像変換" => {
+                "ファイル変換" => {
                     if let Err(why) = commands::convert::run(&ctx, &command).await {
                         println!("Error executing convert command: {why}");
                     }
