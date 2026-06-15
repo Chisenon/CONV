@@ -1,6 +1,6 @@
 # CONV
 
-右クリックメニューから画像・動画を変換するDiscord Bot。
+右クリックメニューから画像・動画・音声を変換するDiscord Bot。
 
 ## できること
 
@@ -21,23 +21,16 @@
 - ICO変換時は256×256に自動リサイズ
 - アニメーションGIFは先頭フレームのみ変換
 
-### 動画変換（ffmpeg）
+### 動画・音声変換（ffmpeg）
 
 | 変換元 | 変換先 |
 |--------|--------|
-| MP4    | MP4 (H.264), WebM (VP9), MOV, GIF, AVI |
-| WebM   | MP4 (H.264), MOV, GIF, AVI |
-| MOV    | MP4 (H.264), WebM (VP9), GIF, AVI |
-| AVI    | MP4 (H.264), WebM (VP9), MOV, GIF |
-| MKV    | MP4 (H.264), WebM (VP9), MOV, GIF, AVI |
-| FLV    | MP4 (H.264), WebM (VP9), MOV, GIF, AVI |
+| MP4 / WebM / MOV / AVI / MKV / FLV | MP4, WebM, MOV, AVI, GIF + **MP3, AAC, FLAC, OPUS, WAV, OGG**（音声抽出）|
+| MP3 / AAC / FLAC / OPUS / WAV / OGG | MP3, AAC, FLAC, OPUS, WAV, OGG + **MP4, WebM**（音声→動画）|
 
 - ffmpegがサーバーにインストールされている必要があります
 - GIF出力はfps=10,幅480pxに自動調整
-
-### 共通
-
-- 変換後ファイルはephemeralメッセージで届く（本人のみ閲覧可）
+- 音声→動画は黒画面+音声の動画を生成
 
 ## セットアップ
 

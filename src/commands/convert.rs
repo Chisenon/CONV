@@ -95,9 +95,53 @@ async fn process_image(
     send_result(ctx, interaction, attachment, &filename, file).await
 }
 
-// ==================== Video ====================
+// ==================== FFmpeg共通 ====================
 
 const VIDEO_EXTS: &[&str] = &["mp4", "webm", "mov", "avi", "mkv", "flv", "m4v"];
+const AUDIO_EXTS: &[&str] = &["mp3", "aac", "flac", "opus", "wav", "ogg", "m4a", "wma"];
+
+fn is_video_ext(ext: &str) -> bool {
+    VIDEO_EXTS.contains(&ext.to_lowercase().as_str())
+}
+
+fn is_audio_ext(ext: &str) -> bool {
+    AUDIO_EXTS.contains(&ext.to_lowercase().as_str())
+}
+
+fn ffmpeg_codec_args(target_ext: &str) -> Vec<&'static str> {
+    match target_ext {
+        "mp4" => vec!["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-c:a", "aac", "-movflags", "+faststart"],
+        "webm" => vec!["-c:v", "libvpx-vp9", "-crf", "30", "-b:v", "0", "-c:a", "libopus"],
+        "gif" => vec!["-vf", "fps=10,scale=480:-1:flags=lanczos"],
+        "mov" => vec!["-c:v", "libx264", "-preset", "medium", "-crf", "23", "-c:a", "aac"],
+        "avi" => vec!["-c:v", "mpeg4", "-q:v", "5", "-c:a", "mp3"],
+        "mp3" => vec!["-c:a", "libmp3lame", "-q:a", "2"],
+        "aac" => vec!["-c:a", "aac", "-b:a", "192k"],
+        "flac" => vec!["-c:a", "flac"],
+        "opus" => vec!["-c:a", "libopus", "-b:a", "128k"],
+        "wav" => vec!["-c:a", "pcm_s16le"],
+        "ogg" => vec!["-c:a", "libvorbis", "-q:a", "5"],
+        _ => vec![],
+    }
+}
+
+async fn run_ffmpeg(args: &[String]) -> Result<(), serenity::Error> {
+    println!("[CONV] Running ffmpeg: ffmpeg {}", args.join(" "));
+    let status = tokio::process::Command::new("ffmpeg")
+        .args(args)
+        .status()
+        .await
+        .map_err(|e| { println!("[CONV] ffmpeg error: {e}"); serenity::Error::Other("ffmpeg not found") })?;
+
+    if !status.success() {
+        println!("[CONV] ffmpeg failed with status: {status}");
+        return Err(serenity::Error::Other("ffmpeg conversion failed"));
+    }
+    println!("[CONV] ffmpeg completed successfully");
+    Ok(())
+}
+
+// ==================== Media targets ====================
 
 fn get_video_targets(ext: &str) -> Vec<(&'static str, &'static str)> {
     let ext = ext.to_lowercase();
@@ -106,107 +150,128 @@ fn get_video_targets(ext: &str) -> Vec<(&'static str, &'static str)> {
         ("mp4", "MP4 (H.264)"),
         ("webm", "WebM (VP9)"),
         ("mov", "MOV"),
-        ("gif", "GIF (アニメーション)"),
+        ("gif", "GIF"),
         ("avi", "AVI"),
     ] {
         if e != ext {
             targets.push((e, label));
         }
     }
+    for &(e, label) in &[
+        ("mp3", "MP3"),
+        ("aac", "AAC"),
+        ("flac", "FLAC"),
+        ("opus", "OPUS"),
+        ("wav", "WAV"),
+        ("ogg", "OGG"),
+    ] {
+        targets.push((e, label));
+    }
     targets
 }
 
-fn ffmpeg_args(input: &str, output: &str, target_ext: &str) -> Vec<String> {
-    let mut args = vec!["-y".to_string(), "-i".to_string(), input.to_string()];
-    match target_ext {
-        "mp4" => args.extend_from_slice(&[
-            "-c:v".into(), "libx264".into(),
-            "-preset".into(), "medium".into(),
-            "-crf".into(), "23".into(),
-            "-c:a".into(), "aac".into(),
-            "-movflags".into(), "+faststart".into(),
-        ]),
-        "webm" => args.extend_from_slice(&[
-            "-c:v".into(), "libvpx-vp9".into(),
-            "-crf".into(), "30".into(),
-            "-b:v".into(), "0".into(),
-            "-c:a".into(), "libopus".into(),
-        ]),
-        "gif" => args.extend_from_slice(&[
-            "-vf".into(), "fps=10,scale=480:-1:flags=lanczos".into(),
-        ]),
-        "mov" => args.extend_from_slice(&[
-            "-c:v".into(), "libx264".into(),
-            "-preset".into(), "medium".into(),
-            "-crf".into(), "23".into(),
-            "-c:a".into(), "aac".into(),
-        ]),
-        "avi" => args.extend_from_slice(&[
-            "-c:v".into(), "mpeg4".into(),
-            "-q:v".into(), "5".into(),
-            "-c:a".into(), "mp3".into(),
-        ]),
-        _ => {}
+fn get_audio_targets(ext: &str) -> Vec<(&'static str, &'static str)> {
+    let ext = ext.to_lowercase();
+    let mut targets = Vec::new();
+    for &(e, label) in &[
+        ("mp3", "MP3"),
+        ("aac", "AAC"),
+        ("flac", "FLAC"),
+        ("opus", "OPUS"),
+        ("wav", "WAV"),
+        ("ogg", "OGG"),
+    ] {
+        if e != ext {
+            targets.push((e, label));
+        }
     }
-    args.push(output.to_string());
+    for &(e, label) in &[
+        ("mp4", "MP4 (H.264)"),
+        ("webm", "WebM (VP9)"),
+    ] {
+        targets.push((e, label));
+    }
+    targets
+}
+
+// ==================== FFmpeg routing ====================
+
+fn build_ffmpeg_args(source_ext: &str, target_ext: &str) -> Vec<String> {
+    let is_audio_source = is_audio_ext(source_ext);
+    let is_video_target = !is_audio_ext(target_ext) && target_ext != "gif";
+
+    let mut args = vec!["-y".to_string()];
+
+    if is_audio_source && is_video_target {
+        // Audio → Video: add blank video stream
+        args.extend_from_slice(&[
+            "-i".into(), format!("input.{source_ext}"),
+            "-f".into(), "lavfi".into(),
+            "-i".into(), "color=c=black:s=640x360:r=1".into(),
+            "-shortest".into(),
+        ]);
+    } else {
+        args.extend_from_slice(&[
+            "-i".into(), format!("input.{source_ext}"),
+        ]);
+    }
+
+    if !is_audio_source && is_audio_ext(target_ext) {
+        // Video → Audio: strip video
+        args.push("-vn".into());
+    }
+
+    args.extend(ffmpeg_codec_args(target_ext).into_iter().map(String::from));
+    args.push(format!("output.{target_ext}"));
+
     args
 }
 
-async fn process_video(
+async fn process_ffmpeg_generic(
     ctx: &Context,
     interaction: &ComponentInteraction,
     attachment: &Attachment,
+    source_ext: &str,
     target_ext: &str,
 ) -> Result<(), serenity::Error> {
-    println!("[CONV] Downloading video from: {}", attachment.url);
+    println!("[CONV] Downloading from: {}", attachment.url);
     let resp = reqwest::get(&attachment.url)
         .await
         .map_err(|e| { println!("[CONV] Download error: {e}"); serenity::Error::Other("Download error") })?;
-
-    let bytes = resp
-        .bytes()
-        .await
+    let bytes = resp.bytes().await
         .map_err(|e| { println!("[CONV] Read error: {e}"); serenity::Error::Other("Read error") })?
         .to_vec();
     println!("[CONV] Downloaded {} bytes", bytes.len());
 
-    let source_ext = attachment.filename.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
-    let input_file = NamedTempFile::with_suffix(&format!(".{source_ext}"))
+    let in_file = NamedTempFile::with_suffix(&format!(".{source_ext}"))
         .map_err(|e| { println!("[CONV] Temp file error: {e}"); serenity::Error::Other("Temp file error") })?;
-    let input_path = input_file.path().to_str().unwrap().to_string();
-
-    let output_file = NamedTempFile::with_suffix(&format!(".{target_ext}"))
-        .map_err(|e| { println!("[CONV] Temp file error: {e}"); serenity::Error::Other("Temp file error") })?;
-    let output_path = output_file.path().to_str().unwrap().to_string();
-
-    std::fs::write(&input_path, &bytes)
+    let in_path = in_file.path().to_str().unwrap().to_string();
+    std::fs::write(&in_path, &bytes)
         .map_err(|e| { println!("[CONV] Write error: {e}"); serenity::Error::Other("Write error") })?;
-    println!("[CONV] Saved to temp file: {input_path}");
+    println!("[CONV] Saved to temp file: {in_path}");
 
-    let args = ffmpeg_args(&input_path, &output_path, target_ext);
-    println!("[CONV] Running ffmpeg: ffmpeg {}", args.join(" "));
+    let out_file = NamedTempFile::with_suffix(&format!(".{target_ext}"))
+        .map_err(|e| { println!("[CONV] Temp file error: {e}"); serenity::Error::Other("Temp file error") })?;
+    let out_path = out_file.path().to_str().unwrap().to_string();
 
-    let status = tokio::process::Command::new("ffmpeg")
-        .args(&args)
-        .status()
-        .await
-        .map_err(|e| { println!("[CONV] ffmpeg error: {e}"); serenity::Error::Other("ffmpeg error") })?;
+    let raw_args = build_ffmpeg_args(source_ext, target_ext);
+    let args: Vec<String> = raw_args.iter().map(|s| {
+        if s == &format!("input.{source_ext}") { in_path.clone() }
+        else if s == &format!("output.{target_ext}") { out_path.clone() }
+        else { s.to_string() }
+    }).collect();
 
-    if !status.success() {
-        println!("[CONV] ffmpeg failed with status: {status}");
-        return Err(serenity::Error::Other("ffmpeg conversion failed"));
-    }
-    println!("[CONV] ffmpeg completed successfully");
+    run_ffmpeg(&args).await?;
 
-    let output_bytes = std::fs::read(&output_path)
+    let output_bytes = std::fs::read(&out_path)
         .map_err(|e| { println!("[CONV] Read output error: {e}"); serenity::Error::Other("Read output error") })?;
     println!("[CONV] Output size: {} bytes", output_bytes.len());
 
     let filename = format!("converted.{target_ext}");
     let file = CreateAttachment::bytes(output_bytes, filename.clone());
 
-    let _ = std::fs::remove_file(&input_path);
-    let _ = std::fs::remove_file(&output_path);
+    let _ = std::fs::remove_file(&in_path);
+    let _ = std::fs::remove_file(&out_path);
 
     send_result(ctx, interaction, attachment, &filename, file).await
 }
@@ -300,11 +365,11 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
         }
     };
 
-    // Determine media type and build select menu options
     let is_image = get_image_source_format(&extension).is_some();
-    let is_video = VIDEO_EXTS.contains(&extension.as_str());
+    let is_video = is_video_ext(&extension);
+    let is_audio = is_audio_ext(&extension);
 
-    if !is_image && !is_video {
+    if !is_image && !is_video && !is_audio {
         interaction
             .create_response(
                 ctx,
@@ -312,7 +377,7 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
                     CreateInteractionResponseMessage::new()
                         .ephemeral(true)
                         .content(format!(
-                            "対応していないファイル形式です（{extension}）。\n対応画像: PNG, JPEG, GIF, WebP, BMP, TIFF, ICO\n対応動画: MP4, WebM, MOV, AVI, MKV, FLV"
+                            "対応していないファイル形式です（{extension}）。\n対応: PNG, JPEG, GIF, WebP, BMP, TIFF, ICO / MP4, WebM, MOV, AVI, MKV, FLV / MP3, AAC, FLAC, OPUS, WAV, OGG"
                         )),
                 ),
             )
@@ -320,39 +385,32 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
         return Ok(());
     }
 
-    // Build select menu options
-    let (options, is_image_targets): (Vec<CreateSelectMenuOption>, bool) = if is_image {
+    let (options, media_kind): (Vec<CreateSelectMenuOption>, &str) = if is_image {
         let fmt = get_image_source_format(&extension).unwrap();
         let targets = get_image_targets(fmt);
         if targets.is_empty() {
-            interaction
-                .create_response(
-                    ctx,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .ephemeral(true)
-                            .content("このファイルの変換先がありません。"),
-                    ),
-                )
-                .await?;
+            interaction.create_response(ctx, CreateInteractionResponse::Message(
+                CreateInteractionResponseMessage::new().ephemeral(true).content("このファイルの変換先がありません。"),
+            )).await?;
             return Ok(());
         }
-        let opts: Vec<CreateSelectMenuOption> = targets
-            .iter()
+        let opts: Vec<CreateSelectMenuOption> = targets.iter()
             .map(|(_, name)| CreateSelectMenuOption::new(*name, name.to_lowercase()))
             .collect();
-        (opts, true)
-    } else {
+        (opts, "image")
+    } else if is_video {
         let targets = get_video_targets(&extension);
-        let opts: Vec<CreateSelectMenuOption> = targets
-            .iter()
-            .map(|(ext, label)| CreateSelectMenuOption::new(*label, ext.to_string()))
+        let opts: Vec<CreateSelectMenuOption> = targets.iter()
+            .map(|(e, label)| CreateSelectMenuOption::new(*label, e.to_string()))
             .collect();
-        (opts, false)
+        (opts, "video")
+    } else {
+        let targets = get_audio_targets(&extension);
+        let opts: Vec<CreateSelectMenuOption> = targets.iter()
+            .map(|(e, label)| CreateSelectMenuOption::new(*label, e.to_string()))
+            .collect();
+        (opts, "audio")
     };
-
-    let select_menu = CreateSelectMenu::new("format_select", CreateSelectMenuKind::String { options })
-        .placeholder("変換先の形式を選んでください");
 
     interaction
         .create_response(
@@ -361,7 +419,7 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
                 CreateInteractionResponseMessage::new()
                     .ephemeral(true)
                     .content(format!("変換元: **{}**\n変換先を選んでください", attachment.filename))
-                    .select_menu(select_menu),
+                    .select_menu(CreateSelectMenu::new("format_select", CreateSelectMenuKind::String { options }).placeholder("変換先の形式を選んでください")),
             ),
         )
         .await?;
@@ -370,14 +428,12 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
 
     let select_interaction = match msg
         .await_component_interaction(&ctx.shard)
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(180))
         .await
     {
         Some(i) => i,
         None => {
-            interaction
-                .edit_response(ctx, EditInteractionResponse::new().content("タイムアウトしました。"))
-                .await?;
+            interaction.edit_response(ctx, EditInteractionResponse::new().content("タイムアウトしました。")).await?;
             return Ok(());
         }
     };
@@ -393,19 +449,20 @@ pub async fn run(ctx: &Context, interaction: &CommandInteraction) -> Result<(), 
         .create_response(
             ctx,
             CreateInteractionResponse::UpdateMessage(
-                CreateInteractionResponseMessage::new()
-                    .content("変換中...")
-                    .components(vec![]),
+                CreateInteractionResponseMessage::new().content("変換中...").components(vec![]),
             ),
         )
         .await?;
 
-    if is_image_targets {
-        let target_format = get_image_source_format(&chosen)
-            .ok_or_else(|| serenity::Error::Other("Invalid format"))?;
-        process_image(ctx, &select_interaction, &attachment, target_format).await
-    } else {
-        process_video(ctx, &select_interaction, &attachment, &chosen).await
+    match media_kind {
+        "image" => {
+            let target_format = get_image_source_format(&chosen)
+                .ok_or_else(|| serenity::Error::Other("Invalid format"))?;
+            process_image(ctx, &select_interaction, &attachment, target_format).await
+        }
+        _ => {
+            process_ffmpeg_generic(ctx, &select_interaction, &attachment, &extension, &chosen).await
+        }
     }
 }
 
